@@ -86,6 +86,13 @@ data MarkedEvent = MarkedEvent
     , yamlEndMark   :: YamlMark
     }
 
+-- | Libyaml style data types also encode the value of "implicit"
+-- parameter which dictates whether libyaml can omit the tag.
+class DictatesTagPresence a where
+  -- | Factor out the value of the "implicit" parameter to pass to
+  -- libyaml.
+  factorOutImplicitTagPresence :: a -> (CInt, a)
+
 -- | Style for scalars - e.g. quoted / folded
 -- 
 data Style = Any
@@ -97,17 +104,41 @@ data Style = Any
            | PlainNoTag
     deriving (Show, Read, Eq, Enum, Bounded, Ord, Data, Typeable)
 
+instance DictatesTagPresence Style where
+  factorOutImplicitTagPresence (PlainNoTag) = (1, Plain)
+  factorOutImplicitTagPresence style = (0, style)
+
 -- | Style for sequences - e.g. block or flow
 -- 
 -- @since 0.9.0
-data SequenceStyle = AnySequence | BlockSequence | FlowSequence
-    deriving (Show, Eq, Enum, Bounded, Ord, Data, Typeable)
+data SequenceStyle
+  = AnySequence
+  | BlockSequence
+  | BlockSequenceNoTag
+  | FlowSequence
+  | FlowSequenceNoTag
+  deriving (Show, Eq, Enum, Bounded, Ord, Data, Typeable)
+
+instance DictatesTagPresence SequenceStyle where
+  factorOutImplicitTagPresence BlockSequenceNoTag = (1, BlockSequence)
+  factorOutImplicitTagPresence FlowSequenceNoTag = (1, FlowSequence)
+  factorOutImplicitTagPresence style = (0, style)
 
 -- | Style for mappings - e.g. block or flow
 -- 
 -- @since 0.9.0
-data MappingStyle = AnyMapping | BlockMapping | FlowMapping
-    deriving (Show, Eq, Enum, Bounded, Ord, Data, Typeable)
+data MappingStyle
+  = AnyMapping
+  | BlockMapping
+  | BlockMappingNoTag
+  | FlowMapping
+  | FlowMappingNoTag
+  deriving (Show, Eq, Enum, Bounded, Ord, Data, Typeable)
+
+instance DictatesTagPresence MappingStyle where
+  factorOutImplicitTagPresence BlockMappingNoTag = (1, BlockMapping)
+  factorOutImplicitTagPresence FlowMappingNoTag = (1, FlowMapping)
+  factorOutImplicitTagPresence style = (0, style)
 
 data Tag = StrTag
          | FloatTag
@@ -465,10 +496,7 @@ toEventRaw e f = allocaBytes eventSize $ \er -> do
                     len' = fromIntegral len :: CInt
                 let thetag' = tagToString thetag
                 withCString thetag' $ \tag' -> do
-                    let (pi, style) =
-                            case style0 of
-                                PlainNoTag -> (1, Plain)
-                                x -> (0, x)
+                    let (pi, style) = factorOutImplicitTagPresence style0
                         style' = toEnum $ fromEnum style
                         tagP = castPtr tag'
                         qi = if null thetag' then 1 else 0
@@ -495,47 +523,51 @@ toEventRaw e f = allocaBytes eventSize $ \er -> do
                                     0       -- plain_implicit
                                     qi      -- quoted_implicit
                                     style'  -- style
-        EventSequenceStart tag style Nothing ->
+        EventSequenceStart tag style0 Nothing ->
             withCString (tagToString tag) $ \tag' -> do
                 let tagP = castPtr tag'
+                    (implicit, style) = factorOutImplicitTagPresence style0
                 c_yaml_sequence_start_event_initialize
                   er
                   nullPtr
                   tagP
-                  1
+                  implicit
                   (toEnum $ fromEnum style)
-        EventSequenceStart tag style (Just anchor) ->
+        EventSequenceStart tag style0 (Just anchor) ->
             withCString (tagToString tag) $ \tag' -> do
                 let tagP = castPtr tag'
+                    (implicit, style) = factorOutImplicitTagPresence style0
                 withCString anchor $ \anchor' -> do
                     let anchorP = castPtr anchor'
                     c_yaml_sequence_start_event_initialize
                         er
                         anchorP
                         tagP
-                        1
+                        implicit
                         (toEnum $ fromEnum style)
         EventSequenceEnd ->
             c_yaml_sequence_end_event_initialize er
-        EventMappingStart tag style Nothing ->
+        EventMappingStart tag style0 Nothing ->
             withCString (tagToString tag) $ \tag' -> do
                 let tagP = castPtr tag'
+                    (implicit, style) = factorOutImplicitTagPresence style0
                 c_yaml_mapping_start_event_initialize
                     er
                     nullPtr
                     tagP
-                    1
+                    implicit
                     (toEnum $ fromEnum style)
-        EventMappingStart tag style (Just anchor) ->
+        EventMappingStart tag style0 (Just anchor) ->
             withCString (tagToString tag) $ \tag' -> do
                 withCString anchor $ \anchor' -> do
                     let tagP = castPtr tag'
-                    let anchorP = castPtr anchor'
+                        anchorP = castPtr anchor'
+                        (implicit, style) = factorOutImplicitTagPresence style0
                     c_yaml_mapping_start_event_initialize
                         er
                         anchorP
                         tagP
-                        1
+                        implicit
                         (toEnum $ fromEnum style)
         EventMappingEnd ->
             c_yaml_mapping_end_event_initialize er
